@@ -1,0 +1,30 @@
+cabal: false
+columns: 80
+newline: "lf"
+
+language_extensions:
+- "BlockArguments"
+- "DeriveTraversable"
+- "ImportQualifiedPost"
+- "OverloadedStrings"
+- "TupleSections"
+
+steps:
+- imports:
+    align: "none"
+    empty_list_align: "right_after"
+    list_align: "after_alias"
+    list_padding: 2
+    long_list_align: "new_line"
+    pad_module_names: true
+    post_qualify: true
+    separate_lists: false
+    space_surround: false
+
+- language_pragmas:
+    align: false
+    language_prefix: "language"
+    remove_redundant: true
+    style: "vertical"
+
+- trailing_whitespace: { }

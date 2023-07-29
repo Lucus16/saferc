@@ -26,15 +26,20 @@ var stdout: *FILE;
 var errno: int;
 
 fn main(argc: int, argv: *[argc]*[:0]byte): int {
-        if argc < 2 {
+        # `not`, `and` and `or` are keywords instead of symbols.
+        # SaferC explicitly omits > and >= operators and allows chained
+        # comparisons. That way, comparisons are always in increasing order.
+        # In SaferC, this is idiomatic because it directly relates to whether
+        # the index 1 is in an array of length argc.
+        if not 1 < argc {
                 return 1;
         }
         let src = fopen(argv[1], "r");
-        if !src {
+        if not src {
                 return 1;
         }
         var buf_size: usize = 0x1000;
-        if argc > 2 {
+        if 2 < argc {
                 errno = 0;
                 let buf_size_int = atoi(argv[2]);
                 if errno {
@@ -47,7 +52,7 @@ fn main(argc: int, argv: *[argc]*[:0]byte): int {
         }
 
         let buf = malloc(buf_size);
-        if !buf {
+        if not buf {
                 return 1;
         }
 
