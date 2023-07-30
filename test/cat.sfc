@@ -2,76 +2,56 @@
 # pointers.
 type FILE;
 
-fn malloc(size: usize): nullable *[size]byte;
-fn free(ptr: nullable *[]byte);
+# uninit implies mutable
+fn malloc(size: usize): ?*uninit [size]byte;
+# free doesn't care if your memory is uninitialized.
+fn free(ptr: ?*uninit []byte);
 
 # Note that libc does not require src to be null terminated, merely that any
 # non-base-digit occurs before the end of its valid range. In SaferC, it's
 # common to err on the safe side. Note also that this function is marked pure
 # which allows the compiler to call it multiple times or not at all if
 # convenient.
-pure fn atoi(src: *[:0]const byte): int;
+pure fn atoi(src: &[:0]byte): int;
 
-fn fopen(pathname: *[:0]const byte, mode: *const byte): nullable *FILE;
-fn fread( buf: *[num]writeonly [size]byte, size: usize, num: usize, stream: *FILE): usize;
-#        where result <= num
-#        initializes buf[0..result];
-fn fwrite(buf: *[num]const [size]byte, size: usize, num: usize, stream: *FILE): usize;
-#        where result <= num;
-fn fclose(stream: *FILE): int;
-fn feof(stream: *FILE): int;
-fn ferror(stream: *FILE): int;
+fn fopen(pathname: &[:0]byte, mode: &[:0]byte): ?*mut FILE;
+# the buffer passed to read *may* be uninitialized. The file is not modified but
+# the FILE struct is.
+fn fread( buf: &uninit [num][size]byte, size: usize, num: usize, stream: &mut FILE): usize;
+#        promises result <= num
+#        promises initialized buf[0..result];
+fn fwrite(buf: &[num][size]byte, size: usize, num: usize, stream: &mut FILE): usize;
+#        promises result <= num;
+fn fclose(stream: *mut FILE): int;
+pure fn feof(stream: &FILE): int;
+pure fn ferror(stream: &FILE): int;
 
-var stdout: *FILE;
+var stdout: *mut FILE;
 var errno: int;
 
 fn main(argc: int, argv: *[argc]*[:0]byte): int {
-        # `not`, `and` and `or` are keywords instead of symbols.
-        # SaferC explicitly omits > and >= operators and allows chained
-        # comparisons. That way, comparisons are always in increasing order.
-        # In SaferC, this is idiomatic because it directly relates to whether
-        # the index 1 is in an array of length argc.
-        if not 1 < argc {
-                return 1;
-        }
-        let src = fopen(argv[1], "r");
-        if not src {
-                return 1;
-        }
-        var buf_size: usize = 0x1000;
-        if 2 < argc {
-                errno = 0;
-                let buf_size_int = atoi(argv[2]);
-                if errno {
-                        return errno;
-                } else if buf_size_int < 1 {
-                        return 1;
-                } else if cast_to_usize(&buf_size, buf_size_int) {
-                        return 1;
-                }
-        }
-
-        let buf = malloc(buf_size);
-        if not buf {
-                return 1;
-        }
-
+        # indices that cannot be statically proven to be in an array must have
+        # an or else clause. An or else clause acts on failure.
+        let path = argv[1] or else return 1;
+        # or clauses match zero in nullable pointers, integers and booleans.
+        # src is proven not null because the null case returns.
+        let src = fopen(path, "r") or return 1;
+        # exit if the cast to usize fails or if the result is zero.
+        let buf_size = usize(atoi(argv[2] or else "4096"))
+                or else return 1 or return 1;
+        let buf = malloc(buf_size) or return 1;
         # Static analysis should be able to prove that buf is not initialized
         # by malloc and may be partially initialized by fread but only the
         # initialized parts will be accessed by fwrite.
         while not feof(src) {
-                var nread = fread(buf, 1, buf_size, src);
-                if ferror(src) {
-                        return 1;
-                }
+                let nread = fread(buf, 1, buf_size, src);
+                result = ferror(src);
+                if result return;
                 fwrite(buf, 1, nread, stdout);
-                if ferror(stdout) {
-                        return 1;
-                }
+                result = ferror(src);
+                if result return;
         }
         free(buf);
-        if fclose(src) {
-                return errno;
-        }
+        if fclose(src) return errno;
         return 0;
 }

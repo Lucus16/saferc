@@ -29,16 +29,21 @@ data Count
   | ZeroTerminated
   deriving (Show)
 
+data MemoryState
+  = Uninitialized -- Including partially uninitialized
+  | Mutable
+  | ReadOnly
+  deriving (Show)
+
 data Type
   = Int
   | USize
   | Byte
   | NamedType Identifier
-  | PointerTo Type
+  | PointerTo MemoryState Type
+  | ReferenceTo MemoryState Type
   | Nullable Type
   | ArrayOf Count Type
-  | ReadOnly Type
-  | WriteOnly Type
   | Inert -- one value
   | NoReturn -- no values
   deriving (Show)
@@ -56,6 +61,8 @@ data Literal
 data Expression
   = Literal Literal
   | Variable Identifier
+  | Access Expression Identifier
+  | Deref Expression
   | Index Expression Expression
   | Call Expression [Expression]
   | Equal Expression Expression
@@ -64,8 +71,10 @@ data Expression
   | LessOrEqual Expression Expression
   | And Expression Expression
   | Or Expression Expression
+  | OrElse Expression Expression
   | Not Expression
-  | Deref Expression
+  | AddressOf Expression
+  | Return (Maybe Expression)
   deriving (Show)
 
 type Block = [Statement]
@@ -87,10 +96,9 @@ data Statement
   | While Expression Block
   | Break
   | Continue
-  | Return (Maybe Expression)
   | Comments [Text]
-  | Assign Identifier Expression
-  | Run Identifier [Expression]
+  | Expression Expression
+  | Assignment Expression Expression
   deriving (Show)
 
 purity :: Parser Purity
@@ -127,17 +135,18 @@ varStatement = Var <$ keyword "var"
   <*> optional (symbol "=" >> expression)
   <* symbol ";"
 
+-- Only statements that transfer control may appear in an if without braces.
 ifStatement :: Parser Statement
 ifStatement = If <$ keyword "if"
   <*> expression
-  <*> block
+  <*> (pure <$> returnStatement <|> block)
   <*> (fromMaybe [] <$> optional (keyword "else" *> ((pure <$> ifStatement) <|> block)))
 
 whileStatement :: Parser Statement
 whileStatement = While <$ keyword "while" <*> expression <*> block
 
 returnStatement :: Parser Statement
-returnStatement = Return <$ keyword "return" <*> optional expression <* symbol ";"
+returnStatement = Expression . Return <$ keyword "return" <*> optional expression <* symbol ";"
 
 statement :: Parser Statement
 statement =
@@ -146,23 +155,21 @@ statement =
   <|> returnStatement
   <|> varStatement
   <|> whileStatement
-  <|> exprStatement
   <|> Comments <$> some comment
-
-exprStatement :: Parser Statement
-exprStatement = do
-  name <- identifier
-  Assign name <$ symbol "=" <*> expression <* symbol ";"
-    <|> Run name <$ symbol "(" <*> (expression `sepBy` symbol ",") <* symbol ")" <* symbol ";"
+  <|> (&) <$> expression <*> (flip Assignment <$ symbol "=" <*> expression <|> pure Expression) <* symbol ";"
 
 expression :: Parser Expression
 expression = or_
 
 or_ :: Parser Expression
-or_ = foldl (&) <$> and_ <*> many (Or <$ keyword "or" <*> and_)
+or_ = foldl (&) <$> and_ <*> many
+  (flip <$> (OrElse <$ keyword "or else" <|> Or <$ keyword "or") <*> and_)
 
 and_ :: Parser Expression
-and_ = foldl (&) <$> not_ <*> many (And <$ keyword "and" <*> not_)
+and_ = foldl (&) <$> return_ <*> many (flip And <$ keyword "and" <*> return_)
+
+return_ :: Parser Expression
+return_ = Return <$ keyword "return" <*> optional not_ <|> not_
 
 not_ :: Parser Expression
 not_ = flip (foldl (&)) <$> many (Not <$ keyword "not") <*> comparison
@@ -187,7 +194,7 @@ postfix = do
 
 prefix :: Parser Expression
 prefix = flip (foldl (&))
-  <$> many (Deref <$ symbol "&")
+  <$> many (AddressOf <$ symbol "&")
   <*> postfix
 
 signed :: Num a => Parser a -> Parser a
@@ -226,12 +233,16 @@ arraySize =
   <|> ZeroTerminated <$ symbol ":" <* symbol "0"
   <|> pure UnknownCount
 
+memoryState :: Parser MemoryState
+memoryState = Uninitialized <$ keyword "uninit"
+  <|> Mutable <$ keyword "mut"
+  <|> pure ReadOnly
+
 type_ :: Parser Type
-type_ = Nullable <$ keyword "nullable" <*> type_
-  <|> PointerTo <$ symbol "*" <*> type_
+type_ = Nullable <$ symbol "?" <*> type_
+  <|> PointerTo <$ symbol "*" <*> memoryState <*> type_
+  <|> ReferenceTo <$ symbol "&" <*> memoryState <*> type_
   <|> ArrayOf <$ symbol "[" <*> arraySize <* symbol "]" <*> type_
-  <|> ReadOnly <$ keyword "const" <*> type_
-  <|> WriteOnly <$ keyword "writeonly" <*> type_
   <|> NamedType <$> identifier
 
 comment :: Parser Text
