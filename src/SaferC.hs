@@ -23,8 +23,7 @@ newtype Identifier = Identifier Text
   deriving (Show)
 
 data Count
-  = UnknownCount
-  | KnownCount Natural
+  = KnownCount Natural
   | VarCount Identifier
   | ZeroTerminated
   deriving (Show)
@@ -231,7 +230,6 @@ arraySize =
   KnownCount <$> lexeme L.decimal
   <|> VarCount <$> identifier
   <|> ZeroTerminated <$ symbol ":" <* symbol "0"
-  <|> pure UnknownCount
 
 memoryState :: Parser MemoryState
 memoryState = Uninitialized <$ keyword "uninit"
