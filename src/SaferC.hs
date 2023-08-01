@@ -1,18 +1,23 @@
 module SaferC where
 
 import Control.Applicative ((<|>))
+import Control.Comonad (extract)
+import Control.Comonad.Cofree (Cofree(..))
 import Data.Char (isAlpha, isDigit, isSpace)
 import Data.Function ((&))
 import Data.Functor (void)
+import Data.Functor.Classes (Show1(..))
+import Data.Functor.Classes.Generic (liftShowsPrecDefault)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Void (Void)
+import GHC.Generics (Generic1)
 import Numeric.Natural (Natural)
 import Text.Megaparsec
-  (MonadParsec, Parsec, Token, Tokens, anySingle, between, chunk, eof, many,
-  notFollowedBy, optional, satisfy, sepBy, single, some, takeWhile1P,
-  takeWhileP)
+  (MonadParsec, Parsec, SourcePos(..), Token, Tokens, TraversableStream,
+  anySingle, between, chunk, eof, getSourcePos, many, notFollowedBy, optional,
+  satisfy, sepBy, single, some, takeWhile1P, takeWhileP, unPos)
 import Text.Megaparsec.Char (newline)
 import Text.Megaparsec.Char.Lexer qualified as L
   (decimal, hexadecimal, lexeme, signed, symbol)
@@ -57,24 +62,53 @@ data Literal
   | Text Text
   deriving (Show)
 
-data Expression
+data ExprF e
   = Literal Literal
   | Variable Identifier
-  | Access Expression Identifier
-  | Deref Expression
-  | Index Expression Expression
-  | Call Expression [Expression]
-  | Equal Expression Expression
-  | Unequal Expression Expression
-  | LessThan Expression Expression
-  | LessOrEqual Expression Expression
-  | And Expression Expression
-  | Or Expression Expression
-  | OrElse Expression Expression
-  | Not Expression
-  | AddressOf Expression
-  | Return (Maybe Expression)
-  deriving (Show)
+  | Access e Identifier
+  | Deref e
+  | Index e e
+  | Call e [e]
+  | Equal e e
+  | Unequal e e
+  | LessThan e e
+  | LessOrEqual e e
+  | And e e
+  | Or e e
+  | OrElse e e
+  | Not e
+  | AddressOf e
+  | Return (Maybe e)
+  deriving (Functor, Generic1, Show)
+
+instance Show1 ExprF where
+  liftShowsPrec = liftShowsPrecDefault
+
+data Source = Source
+  { sourceStart :: SourcePos
+  , sourceEnd :: SourcePos
+  }
+
+instance Show Source where
+  show src =
+    foo sourceName
+    <> ":" <> foo (show . unPos . sourceLine)
+    <> ":" <> foo (show . unPos . sourceColumn)
+    where
+      foo a
+        | x == y = x
+        | otherwise = x <> "-" <> y
+        where
+          x = a (sourceStart src)
+          y = a (sourceEnd src)
+
+instance Semigroup Source where
+  x <> y = Source
+    { sourceStart = min (sourceStart x) (sourceStart y)
+    , sourceEnd = max (sourceEnd x) (sourceEnd y)
+    }
+
+type ExprLoc = Cofree ExprF Source
 
 type Block = [Statement]
 
@@ -84,20 +118,20 @@ data Parameter = Parameter Identifier Type
 data Definition
   = TypeDef Identifier (Maybe Type)
   | FunctionDef Purity Identifier [Parameter] Type (Maybe Block)
-  | GlobalDef Identifier Type (Maybe Expression)
+  | GlobalDef Identifier Type (Maybe ExprLoc)
   | TopComments [Text]
   deriving (Show)
 
 data Statement
-  = Let Identifier Type Expression
-  | Var Identifier Type (Maybe Expression)
-  | If Expression Block Block
-  | While Expression Block
+  = Let Identifier Type ExprLoc
+  | Var Identifier Type (Maybe ExprLoc)
+  | If ExprLoc Block Block
+  | While ExprLoc Block
   | Break
   | Continue
   | Comments [Text]
-  | Expression Expression
-  | Assignment Expression Expression
+  | Expression ExprLoc
+  | Assignment ExprLoc ExprLoc
   deriving (Show)
 
 purity :: Parser Purity
@@ -145,7 +179,7 @@ whileStatement :: Parser Statement
 whileStatement = While <$ keyword "while" <*> expression <*> block
 
 returnStatement :: Parser Statement
-returnStatement = Expression . Return <$ keyword "return" <*> optional expression <* symbol ";"
+returnStatement = Expression <$> located (Return <$ keyword "return" <*> optional expression <* symbol ";")
 
 statement :: Parser Statement
 statement =
@@ -157,44 +191,37 @@ statement =
   <|> Comments <$> some comment
   <|> (&) <$> expression <*> (flip Assignment <$ symbol "=" <*> expression <|> pure Expression) <* symbol ";"
 
-expression :: Parser Expression
+expression :: Parser ExprLoc
 expression = or_
 
-or_ :: Parser Expression
-or_ = foldl (&) <$> and_ <*> many
-  (flip <$> (OrElse <$ keyword "or else" <|> Or <$ keyword "or") <*> and_)
+or_ :: Parser ExprLoc
+or_ = manyInfixl and_ $
+  OrElse <$ keyword "or else"
+  <|> Or <$ keyword "or"
 
-and_ :: Parser Expression
-and_ = foldl (&) <$> return_ <*> many (flip And <$ keyword "and" <*> return_)
+and_ :: Parser ExprLoc
+and_ = manyInfixl return_ $ And <$ keyword "and"
 
-return_ :: Parser Expression
-return_ = Return <$ keyword "return" <*> optional not_ <|> not_
+return_ :: Parser ExprLoc
+return_ = located (Return <$ keyword "return" <*> optional notExpr) <|> notExpr
 
-not_ :: Parser Expression
-not_ = flip (foldl (&)) <$> many (Not <$ keyword "not") <*> comparison
+notExpr :: Parser ExprLoc
+notExpr = manyPrefix comparison $ Not <$ keyword "not"
 
-comparison :: Parser Expression
-comparison = do
-  lhs <- prefix
-  cmps <- many $ flip <$>
-    (Equal <$ symbol "=="
-    <|> Unequal <$ symbol "!="
-    <|> LessThan <$ symbol "<"
-    <|> LessOrEqual <$ symbol "<=") <*> prefix
-  pure $ foldl (&) lhs cmps
+comparison :: Parser ExprLoc
+comparison = manyInfixl prefixExpr $
+  Equal <$ symbol "=="
+  <|> Unequal <$ symbol "!="
+  <|> LessThan <$ symbol "<"
+  <|> LessOrEqual <$ symbol "<="
 
-postfix :: Parser Expression
-postfix = do
-  t <- term
-  postfixes <- many $
-    flip Call <$ symbol "(" <*> (expression `sepBy` symbol ",") <* symbol ")"
-    <|> flip Index <$ symbol "[" <*> expression <* symbol "]"
-  pure $ foldl (&) t postfixes
+postfixExpr :: Parser ExprLoc
+postfixExpr = manyPostfix term $
+  flip Call <$ symbol "(" <*> (expression `sepBy` symbol ",") <* symbol ")"
+  <|> flip Index <$ symbol "[" <*> expression <* symbol "]"
 
-prefix :: Parser Expression
-prefix = flip (foldl (&))
-  <$> many (AddressOf <$ symbol "&")
-  <*> postfix
+prefixExpr :: Parser ExprLoc
+prefixExpr = manyPrefix postfixExpr $ AddressOf <$ symbol "&"
 
 signed :: Num a => Parser a -> Parser a
 signed = L.signed (pure ())
@@ -208,8 +235,8 @@ literal =
     char :: Parser Char
     char = (single '\\' *> anySingle) <|> satisfy (not . (`Text.elem` "\"\\"))
 
-term :: Parser Expression
-term =
+term :: Parser ExprLoc
+term = located $
   Variable <$> identifier
   <|> Literal <$> literal
 
@@ -245,6 +272,47 @@ type_ = Nullable <$ symbol "?" <*> type_
 
 comment :: Parser Text
 comment = lexeme $ chunk "#" *> manyP (\c -> c /= '\r' && c /= '\n') <* newline
+
+manyPrefix
+  :: (MonadParsec e s m, TraversableStream s, Functor f)
+  => m (Cofree f Source)
+  -> m (Cofree f Source -> f (Cofree f Source))
+  -> m (Cofree f Source)
+manyPrefix pArg pCon = flip (foldl (&)) <$> many prefix <*> pArg
+  where
+    prefix = do
+      start <- getSourcePos
+      con <- pCon
+      pure \arg -> Source start (sourceEnd (extract arg)) :< con arg
+
+manyPostfix
+  :: (MonadParsec e s m, TraversableStream s, Functor f)
+  => m (Cofree f Source)
+  -> m (Cofree f Source -> f (Cofree f Source))
+  -> m (Cofree f Source)
+manyPostfix pArg pCon = foldl (&) <$> pArg <*> many do
+  con <- pCon
+  end <- getSourcePos
+  pure \arg -> Source (sourceStart (extract arg)) end :< con arg
+
+manyInfixl
+  :: (MonadParsec e s m, TraversableStream s, Functor f)
+  => m (Cofree f Source)
+  -> m (Cofree f Source -> Cofree f Source -> f (Cofree f Source))
+  -> m (Cofree f Source)
+manyInfixl pArg pCon = foldl (&) <$> pArg <*> many do
+  con <- pCon
+  rhs <- pArg
+  pure \lhs -> extract lhs <> extract rhs :< con lhs rhs
+
+located
+  :: (MonadParsec e s m, TraversableStream s, Functor f)
+  => m (f (Cofree f Source)) -> m (Cofree f Source)
+located pX = do
+  start <- getSourcePos
+  x <- pX
+  end <- getSourcePos
+  pure $ Source start end :< x
 
 manyP :: MonadParsec e s m => (Token s -> Bool) -> m (Tokens s)
 manyP = takeWhileP Nothing

@@ -11,6 +11,7 @@ let
       mtl
       parser-combinators
       process
+      recursion-schemes
       text
       utf8-string
     ]);

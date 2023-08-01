@@ -13,15 +13,19 @@ library
       base
     , binary
     , bytestring
+    , comonad
     , containers
     , directory
     , filepath
+    , free
     , megaparsec
     , mtl
     , parser-combinators
     , process
+    , recursion-schemes
     , text
     , transformers
+    , transformers-compat
     , utf8-string
 
   exposed-modules:
@@ -29,11 +33,13 @@ library
 
   default-extensions:
     BlockArguments
+    DeriveGeneric
     DeriveTraversable
     ImportQualifiedPost
     LambdaCase
     OverloadedStrings
     TupleSections
+    ScopedTypeVariables
 
 executable saferc
   main-is:               Main.hs
