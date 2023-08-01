@@ -20,6 +20,8 @@ that interface more completely.
   refer to the same size variable.
 - Index parameters can specify which array they index or which size they are
   smaller than.
+- Pointers can only be compared with < and <= if it can be proven that they
+  point into the same array.
 - owned vs borrowed reference analysis
 - unique vs shared reference analysis
 - Partially initialized structs must be explicitly marked as such. The compiler

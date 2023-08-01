@@ -28,7 +28,7 @@ purity = Pure <$ keyword "pure" <|> pure Impure
 functionDef :: Parser Definition
 functionDef =
   FunctionDef <$> purity <* keyword "fn"
-    <*> identifier
+    <*> sourced identifier
     <*> parameters
     <*> (fromMaybe Inert <$> optional (symbol ":" *> type_))
     <*> ((Just <$> block) <|> (Nothing <$ symbol ";"))
@@ -44,14 +44,14 @@ block = between (symbol "{") (symbol "}") (many statement)
 
 letStatement :: Parser Statement
 letStatement = Let <$ keyword "let"
-  <*> identifier
+  <*> sourced identifier
   <*> (fromMaybe Int <$> optional (symbol ":" >> type_))
   <*> (symbol "=" >> expression)
   <* symbol ";"
 
 varStatement :: Parser Statement
 varStatement = Var <$ keyword "var"
-  <*> identifier
+  <*> sourced identifier
   <*> (fromMaybe Int <$> optional (symbol ":" >> type_))
   <*> optional (symbol "=" >> expression)
   <* symbol ";"
@@ -129,7 +129,7 @@ term = located $
   <|> Literal <$> literal
 
 typeDef :: Parser Definition
-typeDef = keyword "type" >> TypeDef <$> identifier <*> optional type_ <* symbol ";"
+typeDef = keyword "type" >> TypeDef <$> sourced identifier <*> optional type_ <* symbol ";"
 
 definition :: Parser Definition
 definition = TopComments <$> some comment
@@ -138,7 +138,7 @@ definition = TopComments <$> some comment
   <|> globalDef
 
 globalDef :: Parser Definition
-globalDef = GlobalDef <$ keyword "var" <*> identifier <* symbol ":" <*> type_ <*> optional expression <* symbol ";"
+globalDef = GlobalDef <$ keyword "var" <*> sourced identifier <* symbol ":" <*> type_ <*> optional expression <* symbol ";"
 
 arraySize :: Parser Count
 arraySize =
@@ -203,6 +203,15 @@ located pX = do
   x <- pX
   end <- getSourcePos
   pure $ Source start end :< x
+
+sourced
+  :: (MonadParsec e s m, TraversableStream s)
+  => m a -> m (Sourced a)
+sourced pX = do
+  start <- getSourcePos
+  x <- pX
+  end <- getSourcePos
+  pure $ Sourced (Source start end) x
 
 manyP :: MonadParsec e s m => (Token s -> Bool) -> m (Tokens s)
 manyP = takeWhileP Nothing

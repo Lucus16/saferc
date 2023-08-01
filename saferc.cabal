@@ -18,6 +18,7 @@ library
     , directory
     , filepath
     , free
+    , lens
     , megaparsec
     , mtl
     , parser-combinators
@@ -29,11 +30,13 @@ library
     , utf8-string
 
   exposed-modules:
+    SaferC.Check
     SaferC.Parser
     SaferC.Types
 
   default-extensions:
     BlockArguments
+    DeriveAnyClass
     DeriveGeneric
     DeriveTraversable
     ImportQualifiedPost
@@ -56,3 +59,4 @@ executable saferc
 
   default-extensions:
     ImportQualifiedPost
+    LambdaCase

@@ -9,20 +9,20 @@ import Numeric.Natural (Natural)
 import Text.Megaparsec (SourcePos(..), unPos)
 
 newtype Identifier = Identifier Text
-  deriving (Show)
+  deriving (Eq, Ord, Show)
 
 data Count
   = KnownCount Natural
   | VarCount Identifier
   | ZeroTerminated
-  deriving (Show)
+  deriving (Eq, Show)
 
 data MemoryState
   = Uninitialized -- Owner may not read before initializing
   | Mutable  -- Owner may mutate
   | ReadOnly -- Owner promises not to mutate but other references may mutate
   | Constant -- Guaranteed not to mutate while this reference exists
-  deriving (Show)
+  deriving (Eq, Show)
 
 data Type
   = Bool
@@ -36,9 +36,10 @@ data Type
   | NullableOwnedPointerTo MemoryState Type
   | Fallible Type
   | ArrayOf Count Type
+  | FunctionOf [Type] Type
   | Inert -- one value
   | NoReturn -- no values
-  deriving (Show)
+  deriving (Eq, Show)
 
 pattern Zero :: Type
 pattern Zero = LiteralT (Integer 0)
@@ -51,7 +52,12 @@ data Purity
 data Literal
   = Integer Integer
   | Text Text
-  deriving (Show)
+  deriving (Eq, Show)
+
+data Sourced a = Sourced
+  { source :: Source
+  , unSourced :: a
+  } deriving (Show)
 
 data Source = Source
   { sourceStart :: SourcePos
@@ -81,19 +87,21 @@ type ExprLoc = Cofree ExprF Source
 
 type Block = [Statement]
 
-data Parameter = Parameter Identifier Type
-  deriving (Show)
+data Parameter = Parameter
+  { paramName :: Identifier
+  , paramType :: Type
+  } deriving (Show)
 
 data Definition
-  = TypeDef Identifier (Maybe Type)
-  | FunctionDef Purity Identifier [Parameter] Type (Maybe Block)
-  | GlobalDef Identifier Type (Maybe ExprLoc)
+  = TypeDef (Sourced Identifier) (Maybe Type)
+  | FunctionDef Purity (Sourced Identifier) [Parameter] Type (Maybe Block)
+  | GlobalDef (Sourced Identifier) Type (Maybe ExprLoc)
   | TopComments [Text]
   deriving (Show)
 
 data Statement
-  = Let Identifier Type ExprLoc
-  | Var Identifier Type (Maybe ExprLoc)
+  = Let (Sourced Identifier) Type ExprLoc
+  | Var (Sourced Identifier) Type (Maybe ExprLoc)
   | If ExprLoc Block Block
   | While ExprLoc Block
   | Break

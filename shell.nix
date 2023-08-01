@@ -7,6 +7,7 @@ let
     with h; [
       containers
       filepath
+      lens
       megaparsec
       mtl
       parser-combinators
