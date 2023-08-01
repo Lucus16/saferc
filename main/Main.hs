@@ -3,7 +3,7 @@ module Main where
 import Data.Text.IO qualified as Text
 import System.Environment (getArgs)
 import Text.Megaparsec (parseTest)
-import SaferC (file)
+import SaferC.Parser (file)
 
 main :: IO ()
 main = do

@@ -1,4 +1,4 @@
-module SaferC where
+module SaferC.Parser where
 
 import Control.Applicative ((<|>))
 import Control.Comonad (extract)
@@ -6,133 +6,21 @@ import Control.Comonad.Cofree (Cofree(..))
 import Data.Char (isAlpha, isDigit, isSpace)
 import Data.Function ((&))
 import Data.Functor (void)
-import Data.Functor.Classes (Show1(..))
-import Data.Functor.Classes.Generic (liftShowsPrecDefault)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Void (Void)
-import GHC.Generics (Generic1)
-import Numeric.Natural (Natural)
 import Text.Megaparsec
-  (MonadParsec, Parsec, SourcePos(..), Token, Tokens, TraversableStream,
+  (MonadParsec, Parsec, Token, Tokens, TraversableStream,
   anySingle, between, chunk, eof, getSourcePos, many, notFollowedBy, optional,
-  satisfy, sepBy, single, some, takeWhile1P, takeWhileP, unPos)
+  satisfy, sepBy, single, some, takeWhile1P, takeWhileP)
 import Text.Megaparsec.Char (newline)
 import Text.Megaparsec.Char.Lexer qualified as L
   (decimal, hexadecimal, lexeme, signed, symbol)
 
+import SaferC.Types
+
 type Parser = Parsec Void Text
-
-newtype Identifier = Identifier Text
-  deriving (Show)
-
-data Count
-  = KnownCount Natural
-  | VarCount Identifier
-  | ZeroTerminated
-  deriving (Show)
-
-data MemoryState
-  = Uninitialized -- Including partially uninitialized
-  | Mutable
-  | ReadOnly
-  deriving (Show)
-
-data Type
-  = Int
-  | USize
-  | Byte
-  | NamedType Identifier
-  | PointerTo MemoryState Type
-  | ReferenceTo MemoryState Type
-  | Nullable Type
-  | ArrayOf Count Type
-  | Inert -- one value
-  | NoReturn -- no values
-  deriving (Show)
-
-data Purity
-  = Pure
-  | Impure
-  deriving (Show)
-
-data Literal
-  = Integer Integer
-  | Text Text
-  deriving (Show)
-
-data ExprF e
-  = Literal Literal
-  | Variable Identifier
-  | Access e Identifier
-  | Deref e
-  | Index e e
-  | Call e [e]
-  | Equal e e
-  | Unequal e e
-  | LessThan e e
-  | LessOrEqual e e
-  | And e e
-  | Or e e
-  | OrElse e e
-  | Not e
-  | AddressOf e
-  | Return (Maybe e)
-  deriving (Functor, Generic1, Show)
-
-instance Show1 ExprF where
-  liftShowsPrec = liftShowsPrecDefault
-
-data Source = Source
-  { sourceStart :: SourcePos
-  , sourceEnd :: SourcePos
-  }
-
-instance Show Source where
-  show src =
-    foo sourceName
-    <> ":" <> foo (show . unPos . sourceLine)
-    <> ":" <> foo (show . unPos . sourceColumn)
-    where
-      foo a
-        | x == y = x
-        | otherwise = x <> "-" <> y
-        where
-          x = a (sourceStart src)
-          y = a (sourceEnd src)
-
-instance Semigroup Source where
-  x <> y = Source
-    { sourceStart = min (sourceStart x) (sourceStart y)
-    , sourceEnd = max (sourceEnd x) (sourceEnd y)
-    }
-
-type ExprLoc = Cofree ExprF Source
-
-type Block = [Statement]
-
-data Parameter = Parameter Identifier Type
-  deriving (Show)
-
-data Definition
-  = TypeDef Identifier (Maybe Type)
-  | FunctionDef Purity Identifier [Parameter] Type (Maybe Block)
-  | GlobalDef Identifier Type (Maybe ExprLoc)
-  | TopComments [Text]
-  deriving (Show)
-
-data Statement
-  = Let Identifier Type ExprLoc
-  | Var Identifier Type (Maybe ExprLoc)
-  | If ExprLoc Block Block
-  | While ExprLoc Block
-  | Break
-  | Continue
-  | Comments [Text]
-  | Expression ExprLoc
-  | Assignment ExprLoc ExprLoc
-  deriving (Show)
 
 purity :: Parser Purity
 purity = Pure <$ keyword "pure" <|> pure Impure
@@ -264,9 +152,11 @@ memoryState = Uninitialized <$ keyword "uninit"
   <|> pure ReadOnly
 
 type_ :: Parser Type
-type_ = Nullable <$ symbol "?" <*> type_
-  <|> PointerTo <$ symbol "*" <*> memoryState <*> type_
-  <|> ReferenceTo <$ symbol "&" <*> memoryState <*> type_
+type_ =
+  OwnedPointerTo <$ symbol "*" <*> memoryState <*> type_
+  <|> OwnedPointerTo <$ symbol "&" <*> memoryState <*> type_
+  <|> NullableOwnedPointerTo <$ symbol "?*" <*> memoryState <*> type_
+  <|> NullableOwnedPointerTo <$ symbol "?&" <*> memoryState <*> type_
   <|> ArrayOf <$ symbol "[" <*> arraySize <* symbol "]" <*> type_
   <|> NamedType <$> identifier
 

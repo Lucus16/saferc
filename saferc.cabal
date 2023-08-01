@@ -29,7 +29,8 @@ library
     , utf8-string
 
   exposed-modules:
-    SaferC
+    SaferC.Parser
+    SaferC.Types
 
   default-extensions:
     BlockArguments
@@ -37,9 +38,11 @@ library
     DeriveTraversable
     ImportQualifiedPost
     LambdaCase
+    NumericUnderscores
     OverloadedStrings
-    TupleSections
+    PatternSynonyms
     ScopedTypeVariables
+    TupleSections
 
 executable saferc
   main-is:               Main.hs
