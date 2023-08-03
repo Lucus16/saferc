@@ -141,16 +141,32 @@ withStatement (Let name Nothing value) f = do
 withStatement (Let name (Just typ) value) f =
   expectType value typ >> withBinding name typ f
 
+withStatement (Assignment lvalue value) f = case unwrap lvalue of
+  Variable name ->
+    view (envBindings . at name) >>= \case
+      Nothing -> throwError $ Sourced (extract lvalue) $ NotDefined name
+      Just (Sourced _ expectedType) -> expectType value expectedType >> f
+  _ -> f
+
 withStatement (Expression expr) f = checkExpr expr >> f
 
+withStatement (If cond block1 block2) f =
+  expectType cond Bool >> checkBlock block1 >> checkBlock block2 >> f
+
+withStatement (While cond body) f =
+  expectType cond Bool >> checkBlock body >> f
+
 withStatement _ f = f
+
+checkBlock :: Block -> Check ()
+checkBlock defs = flip (foldr withStatement) defs $ pure ()
 
 checkDefinition :: Definition -> Check ()
 checkDefinition (GlobalDef _ typ (Just value)) = expectType value typ
 checkDefinition (FunctionDef _ _ params ret (Just body)) =
   flip (foldr withParameter) params $
   local (envResultType ?~ ret) $
-  flip (foldr withStatement) body $ pure ()
+  checkBlock body
 
 checkDefinition _ = pure ()
 

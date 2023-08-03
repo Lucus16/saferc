@@ -4,8 +4,7 @@ type FILE;
 
 # uninit implies mutable
 fn malloc(size: usize): ?*uninit [size]byte;
-# free doesn't care if your memory is uninitialized.
-fn free(ptr: ?*uninit byte);
+fn free(ptr: ?*void);
 
 # Note that libc does not require src to be null terminated, merely that any
 # non-base-digit occurs before the end of its valid range. In SaferC, it's

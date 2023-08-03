@@ -48,6 +48,7 @@ pattern Zero = LiteralT (Integer 0)
 
 data Purity
   = Pure
+  | Idempotent
   | Impure
   deriving (Show)
 
@@ -154,8 +155,11 @@ isIntegral _ = False
 (<:) :: Type -> Type -> Bool
 _ <: NoReturn = True
 NoReturn <: _ = False
+Void <: _ = True
 NamedType x <: NamedType y = x == y
 NullableOwnedPointerTo _ _ <: Zero = True
+NullableOwnedPointerTo ma a <: NullableOwnedPointerTo mb b
+  = OwnedPointerTo ma a <: OwnedPointerTo mb b
 NullableOwnedPointerTo m a <: b = OwnedPointerTo m a <: b
 Fallible a <: Fallible b = a <: b
 Bool <: Bool = True
@@ -173,6 +177,7 @@ Int <: LiteralT (Integer n) = -0x8000_0000 <= n && n < 0x8000_0000
 Size <: Size = True
 Size <: Bool = True
 Size <: LiteralT (Integer n) = 0 <= n && n < 0x1_0000_0000_0000_0000
+OwnedPointerTo _ Void <: OwnedPointerTo _ _ = True
 OwnedPointerTo Uninitialized tx <: OwnedPointerTo Uninitialized ty = tx <: ty
 OwnedPointerTo Uninitialized tx <: OwnedPointerTo Mutable ty = tx <: ty
 OwnedPointerTo Uninitialized _ <: OwnedPointerTo ReadOnly _ = False

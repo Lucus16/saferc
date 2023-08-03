@@ -23,7 +23,9 @@ import SaferC.Types
 type Parser = Parsec Void Text
 
 purity :: Parser Purity
-purity = Pure <$ keyword "pure" <|> pure Impure
+purity = Pure <$ keyword "pure"
+  <|> Idempotent <$ keyword "idempotent"
+  <|> pure Impure
 
 functionDef :: Parser Definition
 functionDef =
@@ -161,6 +163,7 @@ type_ =
   <|> Int <$ keyword "int"
   <|> Byte <$ keyword "byte"
   <|> Size <$ keyword "usize"
+  <|> Void <$ keyword "void"
   <|> NamedType <$> identifier
 
 comment :: Parser Text

@@ -63,7 +63,7 @@ putError (Sourced src@(Source start end) err) = do
   putStrLn ""
   where
     mark :: Text -> Text
-    mark x = "\x1b[41;4m" <> x <> "\x1b[0m"
+    mark x = "\x1b[31;4;1m" <> x <> "\x1b[0m"
 
 typeError :: MonadError (Sourced Error) m => ExprLoc -> String -> Type -> m a
 typeError expr expected found = throwError $
