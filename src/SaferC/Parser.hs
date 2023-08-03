@@ -34,7 +34,7 @@ functionDef =
     <*> ((Just <$> block) <|> (Nothing <$ symbol ";"))
 
 parameter :: Parser Parameter
-parameter = Parameter <$> identifier <* symbol ":" <*> type_
+parameter = Parameter <$> sourced identifier <* symbol ":" <*> type_
 
 parameters :: Parser [Parameter]
 parameters = between (symbol "(") (symbol ")") (parameter `sepBy` symbol ",")
@@ -45,7 +45,7 @@ block = between (symbol "{") (symbol "}") (many statement)
 letStatement :: Parser Statement
 letStatement = Let <$ keyword "let"
   <*> sourced identifier
-  <*> (fromMaybe Int <$> optional (symbol ":" >> type_))
+  <*> optional (symbol ":" >> type_)
   <*> (symbol "=" >> expression)
   <* symbol ";"
 
@@ -158,6 +158,9 @@ type_ =
   <|> NullableOwnedPointerTo <$ symbol "?*" <*> memoryState <*> type_
   <|> NullableOwnedPointerTo <$ symbol "?&" <*> memoryState <*> type_
   <|> ArrayOf <$ symbol "[" <*> arraySize <* symbol "]" <*> type_
+  <|> Int <$ keyword "int"
+  <|> Byte <$ keyword "byte"
+  <|> Size <$ keyword "usize"
   <|> NamedType <$> identifier
 
 comment :: Parser Text

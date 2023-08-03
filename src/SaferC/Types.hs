@@ -6,7 +6,7 @@ import Data.Functor.Classes.Generic (liftShowsPrecDefault)
 import Data.Text (Text)
 import GHC.Generics (Generic1)
 import Numeric.Natural (Natural)
-import Text.Megaparsec (SourcePos(..), unPos)
+import Text.Megaparsec (SourcePos(..), pos1, unPos)
 
 newtype Identifier = Identifier Text
   deriving (Eq, Ord, Show)
@@ -29,6 +29,7 @@ data Type
   | Byte
   | Int
   | Size
+  | Void
   | LiteralT Literal
   | NamedType Identifier
   | OwnedPointerTo MemoryState Type
@@ -37,6 +38,7 @@ data Type
   | Fallible Type
   | ArrayOf Count Type
   | FunctionOf [Type] Type
+  | CastTo Type
   | Inert -- one value
   | NoReturn -- no values
   deriving (Eq, Show)
@@ -57,14 +59,17 @@ data Literal
 data Sourced a = Sourced
   { source :: Source
   , unSourced :: a
-  } deriving (Show)
-
-data Source = Source
-  { sourceStart :: SourcePos
-  , sourceEnd :: SourcePos
   }
 
+instance Show a => Show (Sourced a) where
+  show (Sourced src x) = show src <> ": " <> show x
+
+data Source
+  = Source { sourceStart :: SourcePos, sourceEnd :: SourcePos }
+  | Builtin
+
 instance Show Source where
+  show Builtin = "builtin"
   show src =
     foo sourceName
     <> ":" <> foo (show . unPos . sourceLine)
@@ -83,12 +88,16 @@ instance Semigroup Source where
     , sourceEnd = max (sourceEnd x) (sourceEnd y)
     }
 
+instance Monoid Source where
+  mempty = Source unknown unknown
+    where unknown = SourcePos "unknown" pos1 pos1
+
 type ExprLoc = Cofree ExprF Source
 
 type Block = [Statement]
 
 data Parameter = Parameter
-  { paramName :: Identifier
+  { paramName :: Sourced Identifier
   , paramType :: Type
   } deriving (Show)
 
@@ -100,7 +109,7 @@ data Definition
   deriving (Show)
 
 data Statement
-  = Let (Sourced Identifier) Type ExprLoc
+  = Let (Sourced Identifier) (Maybe Type) ExprLoc
   | Var (Sourced Identifier) Type (Maybe ExprLoc)
   | If ExprLoc Block Block
   | While ExprLoc Block
@@ -145,6 +154,7 @@ isIntegral _ = False
 (<:) :: Type -> Type -> Bool
 _ <: NoReturn = True
 NoReturn <: _ = False
+NamedType x <: NamedType y = x == y
 NullableOwnedPointerTo _ _ <: Zero = True
 NullableOwnedPointerTo m a <: b = OwnedPointerTo m a <: b
 Fallible a <: Fallible b = a <: b
@@ -172,4 +182,8 @@ OwnedPointerTo Mutable _ <: OwnedPointerTo ReadOnly _ = False
 OwnedPointerTo ReadOnly _ <: OwnedPointerTo Uninitialized _ = False
 OwnedPointerTo ReadOnly tx <: OwnedPointerTo ReadOnly ty = tx <: ty
 OwnedPointerTo ReadOnly tx <: OwnedPointerTo Mutable ty = tx <: ty
+OwnedPointerTo m (ArrayOf (KnownCount 1) tx) <: b = OwnedPointerTo m tx <: b
+a <: OwnedPointerTo m (ArrayOf (KnownCount 1) ty) = a <: OwnedPointerTo m ty
+ArrayOf ZeroTerminated tx <: ArrayOf ZeroTerminated ty = tx <: ty
+OwnedPointerTo ReadOnly (ArrayOf ZeroTerminated Byte) <: LiteralT (Text _) = True
 _ <: _ = False

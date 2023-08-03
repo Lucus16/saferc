@@ -33,12 +33,14 @@ library
     SaferC.Check
     SaferC.Parser
     SaferC.Types
+    SaferC.Error
 
   default-extensions:
     BlockArguments
     DeriveAnyClass
     DeriveGeneric
     DeriveTraversable
+    FlexibleContexts
     ImportQualifiedPost
     LambdaCase
     NumericUnderscores
