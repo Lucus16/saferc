@@ -2,6 +2,8 @@
 
 module SaferC.Check where
 
+import Data.Functor (void)
+import Data.Text qualified as Text
 import Data.Foldable (traverse_)
 import Control.Lens
 import Data.Map (Map)
@@ -11,14 +13,24 @@ import Control.Comonad (extract)
 import Control.Comonad.Cofree (unwrap)
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Reader (ReaderT, local, runReaderT)
+import Data.PartialOrd (PartialOrd((<=)))
+import Prelude hiding ((<), (>), (<=), (>=))
 
 import SaferC.Error
 import SaferC.Types
 
+data Info = Info
+  { _infoType :: Type
+  , _infoMemoryState :: MemoryState
+  , _infoSource :: Source
+  }
+
+makeLenses ''Info
+
 data Env = Env
   { _envResultType :: Maybe Type
   , _envNamedTypes :: Map Identifier (Sourced (Maybe Type))
-  , _envBindings :: Map Identifier (Sourced Type)
+  , _envBindings :: Map Identifier Info
   }
 
 makeLenses ''Env
@@ -35,81 +47,102 @@ type Check a = ReaderT Env (Either (Sourced Error)) a
 expectType :: ExprLoc -> Type -> Check ()
 expectType expr expected = do
   found <- checkExpr expr
-  unless (expected <: found) $ typeError expr (show expected) found
+  unless (found <= expected) $ typeError expr (show expected) found
 
 expectIndex :: ExprLoc -> Check ()
 expectIndex x = checkExpr x >>= \case
-  Byte -> pure ()
-  Size -> pure ()
-  LiteralT (Integer n) | n >= 0 -> pure ()
-  tx -> typeError x "unsigned integer" tx
+  IntegerLiteral i | 0 <= i -> pure ()
+  Integral Byte -> pure ()
+  Integral Size -> pure ()
+  t -> typeError x "unsigned integer" t
+
+expectNullable :: ExprLoc -> Check Type
+expectNullable x = do
+  tx <- checkExpr x
+  case tx of
+    Nullable tx'  -> pure tx'
+    --Integral { }  -> pure tx
+    --Bool { }      -> pure tx
+    --PointerTo { } -> pure tx
+    t -> typeError x "nullable" t
 
 expectArray :: ExprLoc -> Check Type
 expectArray a = checkExpr a >>= go
   where
     go :: Type -> Check Type
-    go (ArrayOf _ tx) = pure tx
-    go (OwnedPointerTo _ t) = go t
+    go (ArrayOf _ _ tx) = pure tx
+    go (PointerTo _ t) = go t
     go ta = typeError a "array" ta
 
 expectComparable :: ExprLoc -> ExprLoc -> Check Type
 expectComparable x y = do
     tx <- checkExpr x
-    ty <- checkExpr y
-    case tx of
-      LiteralT _
-        | ty <: tx -> pure ()
-        | otherwise -> typeError x (show ty) tx
-      _ -> expectType y tx
+    expectType y tx
     pure Bool
 
 checkCast :: Source -> Type -> Type -> Check Type
-checkCast src castTo castFrom = case (castTo, castFrom) of
-  (Byte, Int) -> pure $ Fallible Byte
-  (Byte, Size) -> pure $ Fallible Byte
-  (Int, Byte) -> pure Int
-  (Int, Size) -> pure $ Fallible Int
-  (Size, Byte) -> pure Size
-  (Size, Int) -> pure $ Fallible Size
-  (x, y) | x == y -> pure x
-  _ -> throwError $ Sourced src $ TypeError expected castFrom
+--checkCast _ (Integral toStorageType toRange) (Integral _ fromRange)
+--  | fromRange <= toRange = pure $ Integral toStorageType fromRange
+--  | otherwise = pure $ Fallible $ Integral toStorageType (intersectRange fromRange toRange)
+checkCast _ (Integral toStorageType) (Integral fromStoregeType)
+  | maxRange fromStoregeType <= maxRange toStorageType = pure $ Integral toStorageType
+  | otherwise = pure $ Fallible $ Integral toStorageType
+checkCast src castTo castFrom
+  | castTo == castFrom = pure castTo
+  | otherwise = throwError $ Sourced src $ TypeError expected castFrom
   where expected = "type compatible with " <> show castTo
+
+checkLValue :: ExprLoc -> Check Type
+checkLValue _ = pure $ Integral Int
+
+typeUnion :: Type -> Sourced Type -> Check Type
+typeUnion tx (Sourced tySrc ty)
+  | ty <= tx  = pure tx
+  | tx <= ty  = pure ty
+  | otherwise = throwError $ Sourced tySrc $ TypeError (show tx) ty
 
 checkExpr :: ExprLoc -> Check Type
 checkExpr expr = case unwrap expr of
-  Literal lit -> pure (LiteralT lit)
+  Literal (Integer 0) -> pure $ Nullable NoReturn
+  Literal (Integer i) -> pure $ IntegerLiteral i
+  Literal (Text t) -> pure $ PointerTo Constant $
+    ArrayOf ZeroTerminated (KnownCount (fromIntegral (Text.length t))) (Integral Byte)
   Equal x y -> expectComparable x y
   Unequal x y -> expectComparable x y
   LessThan x y -> expectComparable x y
   LessOrEqual x y -> expectComparable x y
-  And x y -> expectType x Bool >> expectType y Bool >> pure Bool
+  And x y -> do
+    void $ expectNullable x
+    expectNullable y
   Or x y -> do
-    tx <- checkExpr x
-    unless (Bool <: tx) $ typeError x "Bool" tx
-    expectType y tx
-    pure tx
+    tx <- checkExpr x >>= \case
+      Nullable tx -> pure tx
+      tx -> typeError x "nullable" tx
+    checkExpr y >>= \case
+      Nullable ty -> Nullable <$> typeUnion tx (Sourced (extract y) ty)
+      ty -> typeUnion tx (Sourced (extract y) ty)
   OrElse x y -> do
     tx <- checkExpr x
     ty <- checkExpr y
     case tx of
       Fallible tx'
-        | tx' <: ty -> pure tx'
+        | ty <= tx' -> pure tx'
         | otherwise -> typeError y (show tx') ty
       _ -> typeError x "fallible operation" tx
-  Not x -> expectType x Bool >> pure Bool
+  Not x -> expectNullable x >> pure Bool
   AddressOf x -> do
-    tx <- checkExpr x
-    pure (OwnedPointerTo undefined tx)
+    tx <- checkLValue x
+    pure (PointerTo undefined tx)
   Deref x -> do
     tx <- checkExpr x
     case tx of
-      OwnedPointerTo _ tx' -> pure tx'
-      _ -> typeError x "pointer" tx
+      PointerTo mx tx' | mx /= Uninitialized -> pure tx'
+      _ -> typeError x "non-null non-void pointer" tx
   Index a i -> do
     expectIndex i
     Fallible <$> expectArray a
   Variable name -> view (envBindings . at name) >>= \case
-    Just typ -> pure $ unSourced typ
+    Just info -> pure $ info ^. infoType
     Nothing -> throwError $ Sourced (extract expr) $ NotDefined name
   Access _ _ -> undefined
   Return mbResult -> do
@@ -145,16 +178,16 @@ withStatement (Assignment lvalue value) f = case unwrap lvalue of
   Variable name ->
     view (envBindings . at name) >>= \case
       Nothing -> throwError $ Sourced (extract lvalue) $ NotDefined name
-      Just (Sourced _ expectedType) -> expectType value expectedType >> f
+      Just info -> expectType value (info ^. infoType) >> f
   _ -> f
 
 withStatement (Expression expr) f = checkExpr expr >> f
 
 withStatement (If cond block1 block2) f =
-  expectType cond Bool >> checkBlock block1 >> checkBlock block2 >> f
+  expectNullable cond >> checkBlock block1 >> checkBlock block2 >> f
 
 withStatement (While cond body) f =
-  expectType cond Bool >> checkBlock body >> f
+  expectNullable cond >> checkBlock body >> f
 
 withStatement _ f = f
 
@@ -177,8 +210,8 @@ withBinding :: Sourced Identifier -> Type -> Check a -> Check a
 withBinding (Sourced newSrc name) typ f = do
   mbExisting <- view $ envBindings . at name
   case mbExisting of
-    Just (Sourced oldSrc _) -> shadowError name oldSrc newSrc
-    Nothing -> local (envBindings . at name ?~ Sourced newSrc typ) f
+    Just oldInfo -> shadowError name (oldInfo ^. infoSource) newSrc
+    Nothing -> local (envBindings . at name ?~ Info typ Constant newSrc) f
 
 -- withDefinition brings definitions in scope
 withDefinition :: Definition -> Check a -> Check a
@@ -197,7 +230,7 @@ withDefinition (FunctionDef _ name params ret _) f = withBinding name typ f
   where typ = FunctionOf (paramType <$> params) ret
 
 casters :: [(Sourced Identifier, Type)]
-casters = bimap (Sourced Builtin . Identifier) CastTo <$>
+casters = bimap (Sourced Builtin . Identifier) (CastTo . Integral) <$>
   [ ("byte", Byte)
   , ("int", Int)
   , ("usize", Size)

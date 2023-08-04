@@ -11,6 +11,7 @@ let
       megaparsec
       mtl
       parser-combinators
+      partial-order
       process
       recursion-schemes
       text

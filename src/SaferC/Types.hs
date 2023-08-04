@@ -7,14 +7,21 @@ import Data.Text (Text)
 import GHC.Generics (Generic1)
 import Numeric.Natural (Natural)
 import Text.Megaparsec (SourcePos(..), pos1, unPos)
+import Data.PartialOrd (PartialOrd((<=), (>=)))
+import Prelude hiding ((<), (>), (<=), (>=))
 
 newtype Identifier = Identifier Text
   deriving (Eq, Ord, Show)
 
 data Count
-  = KnownCount Natural
+  = UnknownCount
+  | KnownCount Natural
   | VarCount Identifier
-  | ZeroTerminated
+  deriving (Eq, Show)
+
+data ZeroTerminated
+  = ZeroTerminated
+  | NotZeroTerminated
   deriving (Eq, Show)
 
 data MemoryState
@@ -24,27 +31,64 @@ data MemoryState
   | Constant -- Guaranteed not to mutate while this reference exists
   deriving (Eq, Show)
 
-data Type
-  = Bool
-  | Byte
+data StorageType
+  = Byte
   | Int
   | Size
-  | Void
-  | LiteralT Literal
-  | NamedType Identifier
-  | OwnedPointerTo MemoryState Type
-  -- | ReferenceTo MemoryState Type
-  | NullableOwnedPointerTo MemoryState Type
-  | Fallible Type
-  | ArrayOf Count Type
-  | FunctionOf [Type] Type
-  | CastTo Type
-  | Inert -- one value
-  | NoReturn -- no values
   deriving (Eq, Show)
 
-pattern Zero :: Type
-pattern Zero = LiteralT (Integer 0)
+data Type
+  = NonZero StorageType
+  | IntegerLiteral Integer
+  | Null
+  | NonNullBool
+  | NamedType Identifier
+  | Nullable Type -- ^ Not all types can be stored nullable. And x y : Nullable tx
+  | Fallible Type -- ^ Only exists as intermediate type, cannot be stored.
+  | PointerTo MemoryState Type
+  | ArrayOf ZeroTerminated Count Type
+  | FunctionOf [Type] Type
+  | CastTo Type -- ^ The type of "functions" that cast their argument.
+  | Void -- ^ Only used in pointers.
+  | Inert -- ^ Only one value, no information.
+  | NoReturn -- ^ Does not have values.
+  deriving (Eq, Show)
+
+pattern Bool :: Type
+pattern Bool = Nullable NonNullBool
+
+pattern Integral :: StorageType -> Type
+pattern Integral s = Nullable (NonZero s)
+
+maxRange :: StorageType -> Range
+maxRange t = uncurry (Range True) $
+  case t of
+    Byte -> (0, 0xff)
+    Int -> (-0x8000_0000, 0x7fff_ffff)
+    Size -> (0, 0xffff_ffff_ffff_ffff)
+
+inRange :: Integer -> Range -> Bool
+inRange 0 range = rangeZero range
+inRange i range = rangeMin range <= i && i <= rangeMax range
+
+data Range = Range
+  { rangeZero :: Bool
+  , rangeMin :: Integer
+  , rangeMax :: Integer
+  } deriving (Eq, Show)
+
+instance PartialOrd Range where
+  x <= y =
+    (not (rangeZero x) || rangeZero y)
+    && rangeMin x >= rangeMin y
+    && rangeMax x <= rangeMax y
+
+intersectRange :: Range -> Range -> Range
+intersectRange x y = Range
+  { rangeZero = rangeZero x && rangeZero y
+  , rangeMin = max (rangeMin x) (rangeMin y)
+  , rangeMax = min (rangeMax x) (rangeMax y)
+  }
 
 data Purity
   = Pure
@@ -143,52 +187,35 @@ data ExprF e
 instance Show1 ExprF where
   liftShowsPrec = liftShowsPrecDefault
 
-isIntegral :: Type -> Bool
-isIntegral Bool = True
-isIntegral Byte = True
-isIntegral Int = True
-isIntegral Size = True
-isIntegral (LiteralT (Integer _)) = True
-isIntegral NoReturn = True
-isIntegral _ = False
+-- x <= y should be read as:
+--    a value of type x can be assigned to a variable of type y
+instance PartialOrd Type where
+  NoReturn     <= _            = True
+  _            <= NoReturn     = False
+  NonZero x    <= NonZero y    = maxRange x <= maxRange y
+  Fallible x   <= Fallible y   = x <= y
+  x            <= Fallible y   = x <= y
+  IntegerLiteral 0 <= Nullable _ = True
+  IntegerLiteral i <= Integral y = i `inRange` maxRange y
+  Nullable x   <= Nullable y   = x <= y
+  x            <= Nullable y   = x <= y
+  NamedType x  <= NamedType y  = x == y
 
-(<:) :: Type -> Type -> Bool
-_ <: NoReturn = True
-NoReturn <: _ = False
-Void <: _ = True
-NamedType x <: NamedType y = x == y
-NullableOwnedPointerTo _ _ <: Zero = True
-NullableOwnedPointerTo ma a <: NullableOwnedPointerTo mb b
-  = OwnedPointerTo ma a <: OwnedPointerTo mb b
-NullableOwnedPointerTo m a <: b = OwnedPointerTo m a <: b
-Fallible a <: Fallible b = a <: b
-Bool <: Bool = True
-Bool <: Byte = True
-Bool <: Size = True
-Bool <: Int = True
-Bool <: NullableOwnedPointerTo _ _ = True
-Bool <: LiteralT (Integer n) = 0 <= n && n < 2
-Byte <: Byte = True
-Byte <: Bool = True
-Byte <: LiteralT (Integer n) = 0 <= n && n < 0x100
-Int <: Int = True
-Int <: Bool = True
-Int <: LiteralT (Integer n) = -0x8000_0000 <= n && n < 0x8000_0000
-Size <: Size = True
-Size <: Bool = True
-Size <: LiteralT (Integer n) = 0 <= n && n < 0x1_0000_0000_0000_0000
-OwnedPointerTo _ Void <: OwnedPointerTo _ _ = True
-OwnedPointerTo Uninitialized tx <: OwnedPointerTo Uninitialized ty = tx <: ty
-OwnedPointerTo Uninitialized tx <: OwnedPointerTo Mutable ty = tx <: ty
-OwnedPointerTo Uninitialized _ <: OwnedPointerTo ReadOnly _ = False
-OwnedPointerTo Mutable _ <: OwnedPointerTo Uninitialized _ = False
-OwnedPointerTo Mutable tx <: OwnedPointerTo Mutable ty = tx <: ty
-OwnedPointerTo Mutable _ <: OwnedPointerTo ReadOnly _ = False
-OwnedPointerTo ReadOnly _ <: OwnedPointerTo Uninitialized _ = False
-OwnedPointerTo ReadOnly tx <: OwnedPointerTo ReadOnly ty = tx <: ty
-OwnedPointerTo ReadOnly tx <: OwnedPointerTo Mutable ty = tx <: ty
-OwnedPointerTo m (ArrayOf (KnownCount 1) tx) <: b = OwnedPointerTo m tx <: b
-a <: OwnedPointerTo m (ArrayOf (KnownCount 1) ty) = a <: OwnedPointerTo m ty
-ArrayOf ZeroTerminated tx <: ArrayOf ZeroTerminated ty = tx <: ty
-OwnedPointerTo ReadOnly (ArrayOf ZeroTerminated Byte) <: LiteralT (Text _) = True
-_ <: _ = False
+  PointerTo Constant x <= PointerTo ReadOnly y = x <= y
+  PointerTo _ x <= PointerTo _ (ArrayOf _ (KnownCount 1) y) = x <= y
+  PointerTo _ (ArrayOf _ (KnownCount 1) x) <= PointerTo _ y = x <= y
+  ArrayOf ZeroTerminated _ x <= ArrayOf ZeroTerminated UnknownCount y = x <= y
+  PointerTo _ _ <= PointerTo _ Void = True
+  PointerTo _ x <= PointerTo _ y = x <= y
+
+  _ <= _ = False
+
+--PointerTo Uninitialized tx <: PointerTo Uninitialized ty = tx <: ty
+--PointerTo Uninitialized tx <: PointerTo Mutable ty = tx <: ty
+--PointerTo Uninitialized _ <: PointerTo ReadOnly _ = False
+--PointerTo Mutable _ <: PointerTo Uninitialized _ = False
+--PointerTo Mutable tx <: PointerTo Mutable ty = tx <: ty
+--PointerTo Mutable _ <: PointerTo ReadOnly _ = False
+--PointerTo ReadOnly _ <: PointerTo Uninitialized _ = False
+--PointerTo ReadOnly tx <: PointerTo ReadOnly ty = tx <: ty
+--PointerTo ReadOnly tx <: PointerTo Mutable ty = tx <: ty

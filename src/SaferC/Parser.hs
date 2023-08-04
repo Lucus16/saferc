@@ -54,7 +54,7 @@ letStatement = Let <$ keyword "let"
 varStatement :: Parser Statement
 varStatement = Var <$ keyword "var"
   <*> sourced identifier
-  <*> (fromMaybe Int <$> optional (symbol ":" >> type_))
+  <*> (symbol ":" >> type_)
   <*> optional (symbol "=" >> expression)
   <* symbol ";"
 
@@ -142,27 +142,30 @@ definition = TopComments <$> some comment
 globalDef :: Parser Definition
 globalDef = GlobalDef <$ keyword "var" <*> sourced identifier <* symbol ":" <*> type_ <*> optional expression <* symbol ";"
 
-arraySize :: Parser Count
-arraySize =
-  KnownCount <$> lexeme L.decimal
-  <|> VarCount <$> identifier
-  <|> ZeroTerminated <$ symbol ":" <* symbol "0"
+arrayType :: Parser (Type -> Type)
+arrayType =
+      ArrayOf ZeroTerminated UnknownCount <$ symbol ":" <* symbol "0"
+  <|> ArrayOf NotZeroTerminated . KnownCount <$> lexeme L.decimal
+  <|> ArrayOf NotZeroTerminated . VarCount <$> identifier
 
 memoryState :: Parser MemoryState
 memoryState = Uninitialized <$ keyword "uninit"
   <|> Mutable <$ keyword "mut"
   <|> pure ReadOnly
 
+nullablePointerTo :: MemoryState -> Type -> Type
+nullablePointerTo m = Nullable . PointerTo m
+
 type_ :: Parser Type
 type_ =
-  OwnedPointerTo <$ symbol "*" <*> memoryState <*> type_
-  <|> OwnedPointerTo <$ symbol "&" <*> memoryState <*> type_
-  <|> NullableOwnedPointerTo <$ symbol "?*" <*> memoryState <*> type_
-  <|> NullableOwnedPointerTo <$ symbol "?&" <*> memoryState <*> type_
-  <|> ArrayOf <$ symbol "[" <*> arraySize <* symbol "]" <*> type_
-  <|> Int <$ keyword "int"
-  <|> Byte <$ keyword "byte"
-  <|> Size <$ keyword "usize"
+  PointerTo <$ symbol "*" <*> memoryState <*> type_
+  <|> PointerTo <$ symbol "&" <*> memoryState <*> type_
+  <|> nullablePointerTo <$ symbol "?*" <*> memoryState <*> type_
+  <|> nullablePointerTo <$ symbol "?&" <*> memoryState <*> type_
+  <|> symbol "[" *> arrayType <* symbol "]" <*> type_
+  <|> Integral Int <$ keyword "int"
+  <|> Integral Byte <$ keyword "byte"
+  <|> Integral Size <$ keyword "usize"
   <|> Void <$ keyword "void"
   <|> NamedType <$> identifier
 
