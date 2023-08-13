@@ -31,10 +31,11 @@ library
     , utf8-string
 
   exposed-modules:
+    Data.Partition
     SaferC.Check
+    SaferC.Error
     SaferC.Parser
     SaferC.Types
-    SaferC.Error
 
   default-extensions:
     BlockArguments
